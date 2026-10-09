@@ -1,0 +1,112 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# 超能滤镜 (FilterNX) .gitignore
+#
+# 原则: 只提交**源码与文档**。以下三类一律不进仓库:
+#   1. 编译产物（可由源码重建，且 ELF 有 5 MB、map 有 2 MB）
+#   2. 交付物（zip / ovl 成品 / 效果图 / 介绍视频 —— 走 Releases 而不是提交）
+#   3. 改代码时留下的备份与恢复目录（含旧版本二进制，会让人分不清哪份是现役）
+# ═══════════════════════════════════════════════════════════════════════════
+
+# ── 1. 编译产物 ──────────────────────────────────────────────────────────
+build/
+*.o
+*.d
+*.elf
+*.map
+*.nacp
+*.ovl
+*.nro
+*.nso
+*.kip
+*.a
+
+# ── 2. 交付物 / 分发目录 ─────────────────────────────────────────────────
+dist/
+dist-overlay-only/
+*.zip
+*.7z
+超能滤镜-v*/
+FilterNX-v*/
+preview/*.png
+video/*.mp4
+
+# ── 3. 备份与归档（保留在本地，不进仓库）────────────────────────────────
+_archive/
+_fix_backup_*/
+*_backup_*/
+restore/
+
+# ── 4. 临时与个人文件 ───────────────────────────────────────────────────
+*.tmp
+*.bak
+*.bak[0-9]
+*.bak[0-9][0-9]
+*.orig
+*.log
+*.log.err
+# 反汇编/转储类分析产物（体积大、可由构建产物随时重新生成）
+_dis_*.txt
+*_dump.txt
+NUL
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 以下是 GitHub 官方 C/C++ 模板，防止将来混入杂项
+# ═══════════════════════════════════════════════════════════════════════════
+
+# 预编译头
+*.gch
+*.pch
+
+# 可执行文件与库（Windows / Linux / macOS）
+*.exe
+*.out
+*.app
+*.so
+*.dylib
+*.dll
+*.lib
+*.exp
+*.pdb
+*.ilk
+
+# 调试与性能分析
+*.dSYM/
+*.su
+*.idb
+core
+vgcore.*
+perf.data
+perf.data.old
+
+# CMake / Meson / Autotools（本项目用 make，但防止误加）
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+compile_commands.json
+build.ninja
+.ninja_deps
+.ninja_log
+Makefile.in
+config.status
+autom4te.cache/
+meson-private/
+meson-logs/
+
+# 编辑器与 IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.cache/
+.clangd/
+
+# Python（tools/ 下有 Python 脚本）
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/

@@ -1,0 +1,49 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# 超能滤镜 (FilterNX) .gitattributes
+#
+# 为什么要写这个文件:
+#   本项目的构建链路是 **MSYS2 bash + devkitPro make**，Makefile、*.sh 之类的
+#   脚本如果被检出成 CRLF，bash 会报 `\r: command not found` 之类莫名其妙的错。
+#   而 Windows 版 git 的 core.autocrlf 默认可能把文本转成 CRLF。
+#   所以这里显式钉死每种文件的行尾，不依赖每个开发者本机的 git 配置。
+# ═══════════════════════════════════════════════════════════════════════════
+
+# 默认: 文本文件统一以 LF 存入仓库
+* text=auto eol=lf
+
+# ── 必须是 LF: bash 脚本、Makefile、C/C++ 源码、文档 ────────────────────
+*.sh      text eol=lf
+Makefile  text eol=lf
+*.mk      text eol=lf
+*.c       text eol=lf
+*.h       text eol=lf
+*.cpp     text eol=lf
+*.hpp     text eol=lf
+*.py      text eol=lf
+*.md      text eol=lf
+*.txt     text eol=lf
+*.json    text eol=lf
+*.yml     text eol=lf
+*.yaml    text eol=lf
+
+# ── 必须是 CRLF: Windows 专用脚本 ───────────────────────────────────────
+#   verify_all.ps1 等脚本要求「UTF-8 带 BOM」，行尾保持 CRLF 更贴近 Windows 习惯
+*.ps1     text eol=crlf
+*.bat     text eol=crlf
+*.cmd     text eol=crlf
+
+# ── 二进制: 不做任何行尾与编码转换 ──────────────────────────────────────
+*.png     binary
+*.jpg     binary
+*.jpeg    binary
+*.gif     binary
+*.mp4     binary
+*.zip     binary
+*.7z      binary
+*.ovl     binary
+*.nro     binary
+*.elf     binary
+*.exe     binary
+
+# ── GitHub 语言统计: 第三方框架不算本项目的代码量 ───────────────────────
+overlay/third_party/** linguist-vendored

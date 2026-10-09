@@ -1,0 +1,46 @@
+FilterNX — 大气层游戏滤镜插件（全中文）
+Copyright (C) 2026 FilterNX contributors
+
+本程序是自由软件：你可以依据自由软件基金会发布的 GNU 通用公共许可证
+（第 2 版，或你选择的任何更新版本）条款重新发布和/或修改它。
+
+本程序的分发是希望它有用，但不提供任何担保，甚至不包含适销性或
+特定用途适用性的默示担保。详见 GNU 通用公共许可证。
+
+你应当已随本程序收到 GNU 通用公共许可证的副本；如果没有，
+请访问 <https://www.gnu.org/licenses/>。
+
+────────────────────────────────────────────────────────────────────────
+
+This program is free software; you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation; either version 2 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+────────────────────────────────────────────────────────────────────────
+第三方组件
+────────────────────────────────────────────────────────────────────────
+
+third_party/libultrahand/
+    来自 ppkantorski/libultrahand，含 libtesla 与 libultra。
+    许可: GPLv2，其中 libultra 部分为 CC-BY-4.0。
+    详见 third_party/libultrahand/LICENSE 与 SUB_LICENSE。
+
+────────────────────────────────────────────────────────────────────────
+致谢
+────────────────────────────────────────────────────────────────────────
+
+· Fizeau (averne, GPLv2) —— 证明了 "sysmodule 持有 CMU + overlay 走 IPC"
+  的架构可行性，并公开了 Tegra CMU 三段式管线与 nvdisp ioctl 用法。
+· libultrahand (ppkantorski) —— overlay UI 框架。
+· 4IFIR —— 展示了直接操作背光 PWM 控制器实现 DC 调光的可行性。
+· Tegra 寄存器语义参考 Linux drivers/pwm/pwm-tegra.c、
+  u-boot arch/arm/include/asm/arch-tegra/pwm.h 与 Tegra X1 TRM 24.3.14。

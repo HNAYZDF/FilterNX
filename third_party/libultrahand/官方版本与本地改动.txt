@@ -1,0 +1,17 @@
+libultrahand 来源与本地改动
+================================================================
+来源   : https://github.com/ppkantorski/libultrahand
+版本   : v2.5.3 （releases/latest，2026-07-17 发布）
+资产   : libultrahand.zip   813,821 字节
+SHA256 : 76761effb0c5edaafdbdc03ab5fe0d840d2a419b4f2690fe6cae0a85b24c6912
+导入日 : 2026-10-08
+说明   : 整树为官方发布内容，未删减；升级前版本（2.4.2 那一代）备份在
+         filternx/_fix_backup_20261008/framework-2.4.2/
+
+本地改动（仅此一处，升级时需重新应用）
+----------------------------------------------------------------
+文件   : libultra/source/tsl_utils.cpp
+内容   : 默认语言标签表 9 行英文 -> 中文
+         System RAM -> 系统内存 | free -> 剩余 | Not available -> 暂无选项
+         On -> 开 | Off -> 关 | OK -> 确定 | Back -> 返回 | Hide -> 隐藏 | Cancel -> 取消
+（官方 v2.5.3 里这 9 行的锚点仍在 tsl_utils.cpp:762-770，升级后重新替换即可）
