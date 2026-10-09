@@ -42,10 +42,14 @@ $desk = "C:\Users\hnayz\Desktop\超能滤镜-v$ver"
 New-Item -ItemType Directory -Force -Path $desk | Out-Null
 
 Copy-Item (Join-Path $DIST 'switch') $desk -Recurse -Force
-foreach ($f in @('安装说明.md', 'LICENSE')) {
-    $src = Join-Path $DIST $f
-    if (Test-Path $src) { Copy-Item $src $desk -Force }
+# ⚠ 不要只拷固定几个文件名。文档拆成「安装说明 / 开发说明 / 更新日志」之后，
+#   写死清单会让新文档静默漏掉（曾经桌面包里就只有安装说明，没有开发说明）。
+#   直接从 dist 拷**全部** .md 与 LICENSE，dist 由 package.sh 生成，是唯一来源。
+foreach ($f in (Get-ChildItem $DIST -File -Filter '*.md' -ErrorAction SilentlyContinue)) {
+    Copy-Item $f.FullName $desk -Force
 }
+$lic = Join-Path $DIST 'LICENSE'
+if (Test-Path $lic) { Copy-Item $lic $desk -Force }
 if (Test-Path $PREV) { Copy-Item $PREV (Join-Path $desk '效果图') -Recurse -Force }
 
 $mp4s = Get-ChildItem $VIDEO -Filter '*.mp4' -ErrorAction SilentlyContinue
