@@ -115,3 +115,12 @@ SHA256         9E64B8A7131684411A4BAFC98CFAD4F0CFED3E6F65634FB96B43A9AE111BF91F
 - **`deep_audit.py` 统计口径**：「主页面源码里的小标题调用数: 6
   （常量 MAIN_HEADERS=3）」这条提示统计的是全文件 `CategoryHeader` 总数
   （引导页 3 + 主页面 3），不是主页面的，属噪音提示。
+- **跟踪 23.0.1 的工具链**（2026-10-17 核实）：基线为 devkitPro
+  `libnx 4.12.0-1`（构建于 2026-02-04，`dkp-libs` 仓库内最新，
+  `pacman -Qu` 无 Switch 侧可升级项）+ libultrahand `v2.5.3`（上游最新）。
+  上游 Atmosphere-libs 已于 2026-10-15 加入 23.0.1 支持，但**尚未由 devkitPro
+  打包**，且那批改动在 libstratosphere（sysmodule 侧）—— 与本 overlay 无关：
+  本插件只用 `sm*` 会话/注册与 `svcCloseHandle`/`svcSendSyncRequest`，
+  不碰 `hosversion` / `setsys` / `fatal` / `socket` / `applet`。
+  **新固件真正要重编的是 Fizeau，不是本插件。** 完整依据与判断方式见
+  [开发说明.md](开发说明.md) 第三节「工具链基线：要不要"对齐最新 libnx"」。
