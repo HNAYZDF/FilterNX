@@ -188,10 +188,15 @@ bool apply_preset(const Preset &p) {
 
     const std::uint32_t pid = g_state.profile_id;
 
-    // 先读现有 profile 只为保留其黄昏/黎明等调度字段
+    // 先读回现状再改。
+    //
+    // ⚠ 读失败**必须直接返回失败**，不能像以前那样 "prof = {}" 兜底继续:
+    //   那样会把一份全零 profile 写下去，用户原有的黄昏/黎明时刻与
+    //   调光超时就被静默清掉了（与 fzFillProfile 只改色彩字段的约定相反）。
+    //   宁可这次不生效，也不能悄悄破坏 profile 的其它字段。
     FzProfile prof = {};
     if (R_FAILED(fzGetProfile(pid, &prof)))
-        prof = {};
+        return false;
 
     fzFillProfile(&prof, p.settings, p.components, p.filter);
 
@@ -693,8 +698,14 @@ tsl::elm::Element *MainGui::createUI() {
             // 立即刷新显示，不等 0.5 秒的轮询间隔
             if (g_filter_item) g_filter_item->setValue(filter_state_text());
             if (g_effect_item) g_effect_item->setValue(current_description());
-            tsl::notification->showNow(want ? "滤镜已开启" : "滤镜已关闭",
-                                       26, "立即生效");
+            // 开关状态同样要落盘 —— 它是 config.ini 里 active 那一行，
+            // 不写的话重启后会被盘上的旧值覆盖（详见 fizeau_ipc.hpp）
+            if (fzSaveConfigToSd())
+                tsl::notification->showNow(want ? "滤镜已开启" : "滤镜已关闭",
+                                           26, "立即生效");
+            else
+                tsl::notification->showNow(want ? "滤镜已开启" : "滤镜已关闭",
+                                           26, "重启将失效");
         } else {
             tsl::notification->showNow("操作失败", 26, "检查 Fizeau");
         }
@@ -938,7 +949,15 @@ tsl::elm::Element *PresetGui::createUI() {
                 if (apply_preset(*pp)) {
                     commit_preview();
                     refresh_state();   // 回读真实状态，主界面显示实际值
-                    tsl::notification->showNow(pp->name, 26, "已应用");
+
+                    // ⚠ 必须落盘，否则重启后失效。
+                    //   Fizeau 的 sysmodule 只在开机读一次 config.ini，
+                    //   从不写盘 —— 写盘是 overlay 的职责（详见 fizeau_ipc.hpp）。
+                    //   不写这一步，用户重启后画面会回落到盘上的旧配置。
+                    if (fzSaveConfigToSd())
+                        tsl::notification->showNow(pp->name, 26, "已应用·已保存");
+                    else
+                        tsl::notification->showNow(pp->name, 26, "已应用·重启失效");
                 } else {
                     tsl::notification->showNow("应用失败", 26, "检查服务状态");
                 }

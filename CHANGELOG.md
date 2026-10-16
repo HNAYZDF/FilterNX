@@ -5,6 +5,71 @@
 
 ---
 
+## 5.0.1 — 2026-10-17
+
+### 修复：设置重启后丢失（真机反馈）
+
+**现象**：「每次重启之后屏幕会变黄，要去滤镜那里重新调节。」
+
+**根因**：**持久化的责任方搞错了** —— 插件只发 IPC，从不写盘。
+
+Fizeau 的架构是「sysmodule 只读配置、overlay 负责写配置」：
+
+| 组件 | 与配置文件的关系 | 源码依据 |
+|---|---|---|
+| sysmodule | 开机 **只读一次** 然后应用 | `sysmodule/src/main.cpp`: `if (parse_config()) profile.apply();` |
+| sysmodule 的 IPC 服务 | **完全不碰磁盘** | `sysmodule/src/ipc_server.c` 里没有任何 fopen/写盘 |
+| 官方 overlay | **唯一的写盘方** | `FizeauOverlayGui::~FizeauOverlayGui()` 里 `config.write()` |
+
+所以磁盘上的 `config/Fizeau/config.ini` 才是重启后的**唯一事实来源**，
+`SetProfile` 这类 IPC 只改 sysmodule 的运行态。本插件不走官方 overlay，
+于是用户选的滤镜只活在内存里 —— 重启后 sysmodule 读回整合包预置的旧参数
+（偏黄的色温），画面自然又变回去了。
+
+**修法**：插件自己承担这次写盘（新增 `fzSaveConfigToSd()`）。
+
+- 通过 IPC 读回**全部 4 个 profile** 与 `active` 开关、掌机/底座映射；
+- 按 Fizeau `Config::make()` 的**同一格式**（字段名、顺序、精度）写出
+  `sdmc:/config/Fizeau/config.ini`；已存在 `/switch/Fizeau/config.ini` 时沿用后者
+  —— 与上游 `Config::find_config()` 的查找顺序一致；
+- 值全部取自读回的真实状态，因此**不会覆盖**用户在官方 overlay 里做过的其它设置；
+- **不做 sanitize**，与官方 `Config::write()` 行为一致（值本就来自 Fizeau）；
+- 读不全（任一 profile 读失败）就**放弃写入** —— 宁可不保存，也不用半份数据覆盖配置；
+- 挂载 SD 卡时先判断是否已挂载（NX_EEXIST），只卸载自己挂的那次。
+
+**调用时机**：按 **A 确认滤镜**、以及**开关滤镜**之后。刻意**不在光标预览的每一步**
+写盘 —— 那会让 SD 卡在按住方向键时被反复写入。
+
+**界面反馈**：确认后右下角如实提示 `已应用·已保存` 或 `已应用·重启失效`
+（后者表示写盘失败：卡只读 / 写保护 / 空间不足），不再让用户以为"存上了"。
+
+### 顺带修掉的两个隐患
+
+- **`fzFillProfile()` 会静默重置黄昏/黎明时刻**：它原先无条件把
+  `dusk_begin`/`dusk_end`/`dawn_begin`/`dawn_end`/`dimming_timeout` 写成
+  21:00 / 07:00 / 30:00，而函数上方注释却写着"保留默认的黄昏/黎明时刻" ——
+  用户若在官方 overlay 里改过调度时间，一用滤镜就被悄悄改回去。
+  现在只改色彩设置、`components`、`filter` 三类字段，其余原样保留。
+- **`apply_preset()` 读回失败时用全零 profile 兜底**：那会把一份全零配置写进
+  Fizeau，等于清掉 profile 的调度字段。现在**读不到就直接返回失败**，
+  宁可这次不生效，也不静默破坏数据。
+
+### 产物
+
+```
+Chaoneng.ovl   760,009 字节
+SHA256         ACBA54E3B9BBCA8D298DFEF50B47F268A30D50ED771F0068DCBBBE711F63347A
+菜单显示       超能滤镜  5.0.1
+verify_all.ps1 25 项检查全部通过（2 项需插卡，记为 SKIP）
+```
+
+### 升级说明
+
+直接覆盖 `SD:/switch/.overlays/Chaoneng.ovl` 即可，无需其它操作。
+升级后**按一次 A 确认**你想要的滤镜，配置就会落到卡上；此后重启保持。
+
+---
+
 ## 5.0.0 — 2026-10-08
 
 以**修复缺陷与优化**为主。滤镜数量维持 **100 种**（11 类），无新增、无删减。

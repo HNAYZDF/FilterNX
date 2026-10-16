@@ -3,7 +3,7 @@
 给 Nintendo Switch 大气层（Atmosphère）用的**全中文画面滤镜**插件。
 **100 种中文滤镜，按下立即生效，所有游戏通用。**
 
-**版本 5.0.0（正式版）**
+**版本 5.0.1（正式版）**
 
 **作者：hnayzdf**
 
@@ -69,7 +69,7 @@ SD:/
 |---|---|---|
 | 文件名 | `Chaoneng.ovl` | 纯 ASCII，决定文件能否被加载 |
 | 菜单显示名 | `超能滤镜` | 写在 **NACP** 里 |
-| 菜单显示版本 | `5.0.0` | 写在 **NACP** 里（与 `version.hpp` 同源） |
+| 菜单显示版本 | `5.0.1` | 写在 **NACP** 里（与 `version.hpp` 同源） |
 
 菜单读取逻辑（Ultrahand-Overlay `source/utils.hpp:953` `getOverlayInfo()`）：
 

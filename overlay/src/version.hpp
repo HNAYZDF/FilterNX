@@ -52,7 +52,7 @@
 //
 // 1.0.x = 首个正式（release）系列。此前的 0.x / 6.x 是迭代中的编号，
 // 从 1.0.0 起按语义化版本: 主.次.修
-#define FNX_VERSION "5.0.0"
+#define FNX_VERSION "5.0.1"
 
 // 界面副标题里显示的版本标签
 #define FNX_VERSION_LABEL "v" FNX_VERSION

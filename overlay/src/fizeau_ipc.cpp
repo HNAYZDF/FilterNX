@@ -21,9 +21,13 @@
  */
 
 #include <switch.h>
+#include <sys/stat.h>
 #include <cstring>
 
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <string>
 
 #include "fizeau_ipc.hpp"
 
@@ -264,13 +268,218 @@ void fzFillProfile(FzProfile *out, const FzSettings &s,
     out->components = components;
     out->filter     = filter;
 
-    // 保留默认的黄昏/黎明时刻，不改动 Fizeau 的调度语义
-    out->dusk_begin = FzTime{21, 0, 0};
-    out->dusk_end   = FzTime{21, 30, 0};
-    out->dawn_begin = FzTime{7, 0, 0};
-    out->dawn_end   = FzTime{7, 30, 0};
+    // ⚠ 刻意**不动** out 里已有的 dusk_begin / dusk_end / dawn_begin /
+    //   dawn_end / dimming_timeout。
+    //
+    //   本函数曾经把这五项无条件写成 21:00 / 07:00 / 30:00 —— 那会把用户
+    //   在官方 overlay 里调过的黄昏黎明时刻静默重置，而且因为注释写着
+    //   "保留默认的黄昏/黎明时刻"，看代码的人不会察觉。
+    //
+    //   调用方传进来的必须是 fzGetProfile() 读回的真实 profile；
+    //   若传 {}，这些字段就是 0（下发后由 Fizeau 的 sanitize 钳回合法值）。
+}
 
-    out->dimming_timeout = FzTime{30, 0, 0};
+// ═══════════════════════════════════════════════════════════════════════════
+// 配置落盘 —— 让设置在重启后仍然生效
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// 为什么必须有这一段（真机故障的根因）:
+//
+//   用户反馈「每次重启之后屏幕会变黄，要去滤镜那里重新调节」。
+//
+//   根因不在画面处理，而在**持久化责任归属**:
+//     · Fizeau 的 sysmodule 开机只 parse_config() 读一次盘，之后只认 IPC；
+//     · ipc_server.c 里没有任何写盘代码；
+//     · 写盘是 **overlay 的职责** —— 官方 overlay 在析构时调 config.write()
+//       （FizeauOverlayGui::~FizeauOverlayGui）。
+//
+//   本插件只发 IPC，等于只改了运行态。重启后 sysmodule 读回盘上那份旧配置
+//   （整合包预置的黄屏参数），于是用户看到的画面又变回偏黄。
+//
+//   修法: 插件自己把完整配置写回盘，格式与 Fizeau 的 Config::make() 一致，
+//   值全部来自 IPC 读回的真实状态 —— 既包含用户刚选的滤镜，也不覆盖
+//   他在官方 overlay 里做过的其它设置。
+//
+// ⚠ 这里**不做 sanitize**，与官方 Config::write() 的行为一致:
+//   值本来就是从 Fizeau 读回来的，已在合法范围内。自己再钳一次反而可能
+//   与官方行为产生分歧（例如 range 的合法下限并非 0）。
+namespace {
+
+inline constexpr const char *CONFIG_MAIN   = "sdmc:/config/Fizeau/config.ini";
+inline constexpr const char *CONFIG_ALT    = "sdmc:/switch/Fizeau/config.ini";
+inline constexpr const char *CONFIG_DIRS[] = { "sdmc:/config/Fizeau",
+                                               "sdmc:/switch/Fizeau" };
+
+/*
+ * 决定把配置写到哪个路径 —— 必须与 Fizeau 的 Config::find_config() 同序。
+ *
+ * 上游 find_config() 遍历 {"/switch/Fizeau/config.ini", "/config/Fizeau/config.ini"}，
+ * 返回**第一个 stat 成功的**；都不存在时返回**第二个**（即 /config/Fizeau/）。
+ * 两者都保留，因为整合包可能只放了其中一个。
+ */
+const char *resolveConfigPath() {
+    if (fileExists(CONFIG_ALT))
+        return CONFIG_ALT;
+    if (fileExists(CONFIG_MAIN))
+        return CONFIG_MAIN;
+    return CONFIG_MAIN;   // 与上游一致: 新建时用 /config/Fizeau/
+}
+
+/*
+ * 挂载 SD 卡。
+ *
+ * ⚠ 这是本插件第一次**写** SD 卡（此前只读 log/probe 文件），所以不能想当然:
+ *   · 已经挂上（官方 overlay 或框架挂过）→ 直接用，别重复挂；
+ *   · 没挂 → 自己挂，并在写完的**最后**卸载，避免把挂载状态留给别的 overlay。
+ */
+struct SdAccess {
+    bool mounted_here = false;
+    bool ok           = false;
+
+    SdAccess() {
+        if (R_SUCCEEDED(fsInitialize())) {
+            if (R_SUCCEEDED(fsdevMountSdmc())) {
+                mounted_here = true;
+                ok           = true;
+            } else {
+                // NX_EEXIST / 已被挂载 —— 仍然可用，只是不该由我们卸载。
+                ok = true;
+            }
+        }
+    }
+
+    ~SdAccess() {
+        if (mounted_here)
+            fsdevUnmountDevice("sdmc");
+        fsExit();
+    }
+};
+
+void mkdirFor(const char *file_path) {
+    for (const char *d : CONFIG_DIRS) {
+        if (std::strstr(file_path, d) == file_path)
+            ::mkdir(d, 0777);      // 返回 -1（已存在/建不了）都不影响后面
+    }
+}
+
+// 与 Fizeau 的 format_time 一致: "%02d:%02d"
+std::string fmtTime(FzTime t) {
+    char b[8];
+    std::snprintf(b, sizeof(b), "%02u:%02u", unsigned(t.h), unsigned(t.m));
+    return std::string(b);
+}
+
+// 与 Fizeau 的 format_range 一致: "%.2f-%.2f"
+std::string fmtRange(const FzColorRange &r) {
+    char b[32];
+    std::snprintf(b, sizeof(b), "%.2f-%.2f", double(r.lo), double(r.hi));
+    return std::string(b);
+}
+
+std::string fmtComponents(std::uint32_t c) {
+    if (c == COMP_NONE)
+        return "none";
+    if (c == COMP_ALL)
+        return "all";
+    std::string s;
+    if (c & COMP_RED)   s.push_back('r');
+    if (c & COMP_GREEN) s.push_back('g');
+    if (c & COMP_BLUE)  s.push_back('b');
+    return s.empty() ? std::string("none") : s;
+}
+
+// 单通道筛选: 只有**恰好一位**被置起才算有效，其余写 none。
+// 与官方 format_filter 的语义一致（多位置起时落到 default → none）。
+std::string fmtFilter(std::uint32_t f) {
+    if (f != 0 && (f & (f - 1)) == 0) {
+        if (f == COMP_RED)   return "red";
+        if (f == COMP_GREEN) return "green";
+        if (f == COMP_BLUE)  return "blue";
+    }
+    return "none";
+}
+
+// 写入一个 profile 段（字段名与顺序对齐 Config::make()）
+std::string profileSection(const std::string &tag, const FzProfile &p) {
+    auto f = [](double v) {
+        char b[32];
+        std::snprintf(b, sizeof(b), "%f", v);
+        return std::string(b);
+    };
+
+    std::string s = "[" + tag + "]\n";
+    s += "dusk_begin        = " + fmtTime(p.dusk_begin) + "\n";
+    s += "dusk_end          = " + fmtTime(p.dusk_end)   + "\n";
+    s += "dawn_begin        = " + fmtTime(p.dawn_begin) + "\n";
+    s += "dawn_end          = " + fmtTime(p.dawn_end)   + "\n";
+    s += "temperature_day   = " + std::to_string(p.day_settings.temperature)   + "\n";
+    s += "temperature_night = " + std::to_string(p.night_settings.temperature) + "\n";
+    s += "saturation_day    = " + f(p.day_settings.saturation)   + "\n";
+    s += "saturation_night  = " + f(p.night_settings.saturation) + "\n";
+    s += "hue_day           = " + f(p.day_settings.hue)          + "\n";
+    s += "hue_night         = " + f(p.night_settings.hue)        + "\n";
+    s += "components        = " + fmtComponents(p.components)    + "\n";
+    s += "filter            = " + fmtFilter(p.filter)            + "\n";
+    s += "contrast_day      = " + f(p.day_settings.contrast)     + "\n";
+    s += "contrast_night    = " + f(p.night_settings.contrast)   + "\n";
+    s += "gamma_day         = " + f(p.day_settings.gamma)        + "\n";
+    s += "gamma_night       = " + f(p.night_settings.gamma)      + "\n";
+    s += "luminance_day     = " + f(p.day_settings.luminance)    + "\n";
+    s += "luminance_night   = " + f(p.night_settings.luminance)  + "\n";
+    s += "range_day         = " + fmtRange(p.day_settings.range)   + "\n";
+    s += "range_night       = " + fmtRange(p.night_settings.range) + "\n";
+    // 官方这一行只写分:秒（h 被丢弃），照抄，避免与官方产物不一致
+    s += "dimming_timeout   = " + fmtTime(FzTime{0, p.dimming_timeout.m,
+                                                    p.dimming_timeout.s}) + "\n";
+    s += "\n";
+    return s;
+}
+
+} // namespace
+
+bool fzSaveConfigToSd() {
+    // 没有会话就别动盘 —— 读不到真实状态时写出去只会覆盖掉用户设置
+    if (!session_ready())
+        return false;
+
+    bool active = false;
+    std::uint32_t handheld = PROFILE_1, docked = PROFILE_1;
+    if (R_FAILED(fzGetIsActive(&active)))
+        return false;
+    if (R_FAILED(fzGetActiveProfileId(false, &handheld)))
+        handheld = PROFILE_1;
+    if (R_FAILED(fzGetActiveProfileId(true, &docked)))
+        docked = PROFILE_1;
+
+    FzProfile profiles[PROFILE_TOTAL] = {};
+    for (std::uint32_t i = 0; i < PROFILE_TOTAL; ++i) {
+        if (R_FAILED(fzGetProfile(i, &profiles[i])))
+            return false;      // 读不全就不写: 宁可不保存，也不要用半份数据覆盖配置
+    }
+
+    const char *path = resolveConfigPath();
+
+    SdAccess sd;
+    if (!sd.ok)
+        return false;
+
+    mkdirFor(path);
+
+    std::string out;
+    // 与官方 make() 一致: active 行可被注释掉（表示由用户显式设定过）
+    out += std::string("active            = ") + (active ? "true" : "false") + "\n\n";
+    out += "handheld_profile  = profile" + std::to_string(handheld + 1) + "\n";
+    out += "docked_profile    = profile" + std::to_string(docked   + 1) + "\n\n";
+    for (std::uint32_t i = 0; i < PROFILE_TOTAL; ++i)
+        out += profileSection("profile" + std::to_string(i + 1), profiles[i]);
+
+    std::FILE *fp = std::fopen(path, "w");
+    if (!fp)
+        return false;
+
+    const std::size_t n = std::fwrite(out.c_str(), 1, out.length(), fp);
+    std::fclose(fp);
+    return n == out.length();
 }
 
 } // namespace fnx

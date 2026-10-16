@@ -192,7 +192,53 @@ Result fzGetActiveProfileId(bool is_external, std::uint32_t *out_id);
 // 便捷：把一份设置同时写入 day 与 night
 //   Fizeau 会按黄昏/黎明时间在两组之间自动切换。写成相同数值可以避免
 //   画面在黄昏时刻突然变化 —— 那既意外又难排查。
-void fzFillProfile(FzProfile *out, const FzSettings &s,
+//
+// ⚠ 只改「色彩设置 / components / filter」这三类字段，
+//   **保留** profile 里已有的黄昏黎明时刻与调光超时。
+//   本函数曾经无条件把 dusk/dawn 覆盖成 21:00/07:00 —— 那会把用户在
+//   官方 overlay 里改过的调度时刻静默重置（真机表现为"黄昏切换时机变了"）。
+//   传进来的 prof 必须是 fzGetProfile() 读回的**真实 profile**，不是 {}。
+void fzFillProfile(FzProfile *prof, const FzSettings &s,
                    std::uint32_t components, std::uint32_t filter);
+
+// ---------------------------------------------------------------- 配置落盘
+//
+// ═══════════════════════════════════════════════════════════════════════════
+// ⚠ 这是本插件最容易漏掉的一环：Fizeau 的 sysmodule **只读配置，从不写配置**
+// ═══════════════════════════════════════════════════════════════════════════
+// 源码依据（Fizeau 上游）:
+//
+//   sysmodule/src/main.cpp 启动时:
+//       if (parse_config())
+//           profile.apply();          // ← 开机只从 SD 读一次，然后应用
+//   sysmodule/src/ipc_server.c:
+//       整个文件没有任何 fopen / 写盘操作
+//   common/src/config.cpp 的 Config::write() 只有 overlay 调用:
+//       FizeauOverlayGui::~FizeauOverlayGui() {
+//           tsl::hlp::doWithSDCardHandle([this] { this->config.write(); });
+//           fizeauExit();
+//       }
+//
+// 也就是说: **磁盘上的 config.ini 才是重启后的唯一事实来源**，
+// IPC 改的只是 sysmodule 的运行态。
+//
+// 本插件不走官方 overlay，因此必须自己承担这次写盘 ——
+// 否则用户在插件里选的滤镜**重启后必然丢失**，画面回落到 config.ini 里的旧值
+// （真机现象: 重启后屏幕偏黄，要去滤镜菜单里重新调一次）。
+//
+// 写出格式与 Fizeau 的 Config::make() 完全一致（含 4 个 profile、
+// handheld/docked 映射、active 开关），值取自 IPC 读回的真实状态，
+// 所以不会覆盖用户在官方 overlay 里做过的其它设置。
+//
+// 调用时机: 用户**确认**了改动之后（按 A 确认滤镜 / 开关滤镜），
+// 以及离开插件时仍有未落盘的改动。**不要**在光标预览的每一步都写 ——
+// 那会让 SD 卡在按住方向键时被反复写入。
+//
+// 路径: 优先沿用卡上已有的配置文件位置（/config/Fizeau/config.ini 或
+// /switch/Fizeau/config.ini）；都不存在时按 Fizeau 的默认约定新建前者。
+//
+// 返回: true 表示确实写入成功。失败不影响运行态（画面照常变），
+// 只影响重启后是否保留 —— 界面上会如实提示。
+bool fzSaveConfigToSd();
 
 } // namespace fnx
