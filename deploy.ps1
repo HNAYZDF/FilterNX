@@ -222,7 +222,14 @@ foreach ($old in $OLD_NAMES) {
 $iniPath = "$sd\config\ultrahand\overlays.ini"
 if (Test-Path $iniPath) {
     Copy-Item $iniPath "$bak\overlays.ini" -Force
-    $ini = Get-Content $iniPath -Raw
+    # ⚠ 必须显式按 UTF-8 读写：
+    #   overlays.ini 里有中文 custom_name（如「手办模式」）。
+    #   PowerShell 5.1 的 `Get-Content -Raw` / `Set-Content` 默认按系统 ANSI
+    #   （简体中文机上就是 GBK）解码 —— UTF-8 的中文会被解成乱码再原样写回，
+    #   于是菜单里出现「鐮嬪姫濮…」这种二次编码垃圾。
+    #   这个坑真实发生过：部署一次就把卡上所有中文 overlay 名弄坏一次。
+    $iniUtf8 = New-Object System.Text.UTF8Encoding($false)
+    $ini = [System.IO.File]::ReadAllText($iniPath, $iniUtf8)
 
     # 删掉所有旧文件名对应的孤儿段
     foreach ($old in $OLD_NAMES) {
@@ -252,8 +259,8 @@ if (Test-Path $iniPath) {
         Write-Host "  已在 overlays.ini 追加 [$NEW_NAME] 段"
     }
 
-    Set-Content -Path $iniPath -Value $ini -NoNewline
-    Write-Host "  overlays.ini 已写入"
+    [System.IO.File]::WriteAllText($iniPath, $ini, $iniUtf8)
+    Write-Host "  overlays.ini 已写入（UTF-8）"
 } else {
     Write-Host "  overlays.ini 不存在（Ultrahand 首次扫描时会自建，无需处理）"
 }
