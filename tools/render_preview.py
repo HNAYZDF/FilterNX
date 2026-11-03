@@ -56,7 +56,12 @@ FIRST_ITEM_OFFSET = 33
 # 预览必须按真实裁剪值画，否则会画出真机上看不到的内容 ——
 # 第一版预览就因此把页脚画到了列表项上面，看起来像布局冲突。
 SCISSOR_TOP = 88
-SCISSOR_BOTTOM = 720 - 73 - 97 + 2 + 5      # = 645
+# ⚠ 这里曾经写成 `720 - 73 - 97 + 2 + 5`，算出来是 **557（可见高度）**，
+#   却被当成绝对下边界使用 —— 于是 557px 以下的列表项全被裁掉：
+#   主页面第 6 行（现在的「设置」）在预览里直接消失，看起来像真机没有这一行。
+#   下边界必须是 top + 高度 = 88 + 557 = 645。
+VISIBLE_HEIGHT = 557
+SCISSOR_BOTTOM = SCISSOR_TOP + VISIBLE_HEIGHT      # = 645
 
 # ── 面板尺寸 ──
 # nx-ovlloader 的 overlay 是 448x720（correctFrameSize 判定的"正确尺寸"）
@@ -111,6 +116,16 @@ def extract_presets():
             body):
         out.append((m.group(2), m.group(3), m.group(4)))
     return out, groups
+
+
+def preset_count():
+    """预设总数从 presets.hpp 读（唯一来源）。
+
+    ⚠ 预览图曾写死「共30种」/「30种」：预设后来扩到 100，图没跟着改，
+      交付包里的效果图就一直显示 30 —— 用户一眼就看出来是旧版。
+    """
+    m = re.search(r'std::array<Preset,\s*(\d+)>', read("presets.hpp"))
+    return int(m.group(1)) if m else 0
 
 
 def version():
@@ -265,11 +280,12 @@ def build_main_page():
     y = draw_item(dl, y, "作用于", "档位1")
 
     y = draw_header(dl, y, "操作")
-    y = draw_item(dl, y, "选择滤镜", "共30种")
+    y = draw_item(dl, y, "选择滤镜", f"共{preset_count()}种")
     y = draw_item(dl, y, "关闭滤镜", "恢复画面")
 
     y = draw_header(dl, y, "使用说明")
-    y = draw_item(dl, y, "关于本插件", author_name())
+    # 与 gui.cpp 同步：这一行已由「关于本插件」改为「设置」入口
+    y = draw_item(dl, y, "设置", "变暗/关于")
 
     return compose(img, d, layer)
 
@@ -312,9 +328,27 @@ def build_info_page():
     y = draw_item(dl, y, "3群", "71627115")
 
     y = draw_header(dl, y, "说明")
-    y = draw_item(dl, y, "滤镜数", "30种")
+    y = draw_item(dl, y, "滤镜数", f"{preset_count()}种")
     y = draw_item(dl, y, "引擎", "Fizeau")
     y = draw_item(dl, y, "版本", version())
+
+    return compose(img, d, layer)
+
+
+def build_settings_page():
+    """设置页（5.1.0 新增）—— 变暗超时入口。
+
+    单独出一张图，不塞进三页总览（总览图名与布局已被交付脚本引用）。
+    """
+    img, d, layer, dl = new_page()
+    title, sub = overlay_frame("设置")
+    draw_title(d, title, sub)
+
+    y = 97
+    y = draw_header(dl, y, "显示")
+    y = draw_item(dl, y, "变暗超时", "5分钟", selected=True)
+    y = draw_header(dl, y, "关于")
+    y = draw_item(dl, y, "关于本插件", author_name())
 
     return compose(img, d, layer)
 
@@ -346,6 +380,12 @@ def main():
     sheet_path = outdir / "00-三页总览.png"
     sheet.save(sheet_path)
     print(f"  {sheet_path}  ({sheet.size[0]}x{sheet.size[1]})")
+
+    # 设置页单独一张（5.1.0 新增）
+    settings = build_settings_page().resize((PANEL_W, PANEL_H), Image.LANCZOS)
+    sp = outdir / "04-设置页.png"
+    settings.save(sp)
+    print(f"  {sp}  ({settings.size[0]}x{settings.size[1]})")
 
     return 0
 
