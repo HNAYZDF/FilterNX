@@ -31,7 +31,8 @@
  *
  * ── 各页实测账（行数由 gui.cpp 的 addItem 调用点数出来的，不是估的）──
  *   未连接引导页:   33 + 3*33 + 6*70 = 552 ≤ 557   → 整页放得下
- *   主页面(已连接): 33 + 3*33 + 6*70 = 552 ≤ 557   → 整页放得下
+ *   主页面(已连接): 33 + 2*33 + 5*70 + 1*83 = 532 ≤ 557 → 整页放得下
+ *                  （含一个变暗超时滑动条，TrackBar 高 83 而非 70）
  *   信息页:         33 + 3*33 + 7*70 = 622 > 557   → 需要滚动
  *
  * ⚠ 常量必须与 gui.cpp 的实际 addItem 数保持同步。
@@ -63,9 +64,15 @@ inline constexpr int HEADER_HEIGHT = 33;
 // 首个列表项之前的偏移
 inline constexpr int FIRST_ITEM_OFFSET = 33;
 
-// 一页内容的总高度
-inline constexpr int height_budget(int headers, int items) {
-    return FIRST_ITEM_OFFSET + headers * HEADER_HEIGHT + items * ITEM_HEIGHT;
+// 滑动条（TrackBar / NamedStepTrackBar）高度。
+// ⚠ 比 ListItem 的 70 高 13px —— 主页面的高度预算必须把它单算，
+//   否则会出现"少算 13px 导致底行被裁"的假通过。
+inline constexpr int SLIDER_HEIGHT = 83;
+
+// 一页内容的总高度（sliders = 其中滑动条的数量）
+inline constexpr int height_budget(int headers, int items, int sliders = 0) {
+    return FIRST_ITEM_OFFSET + headers * HEADER_HEIGHT
+         + items * ITEM_HEIGHT + sliders * SLIDER_HEIGHT;
 }
 
 // 在给定行数下能放下的最大列表项数（供设计时参考）
@@ -83,18 +90,21 @@ inline constexpr int max_items_for(int headers) {
 //   改界面行数时，必须同步改这里，否则测试会漏掉溢出。
 //   gui.cpp 对应位置也留了同样的算式注释，两处要一起看。
 
-// 主页面: 3 个小标题 + 6 个列表项
-//   = 3 个「当前画面」状态行（滤镜/效果/作用于）
-//   + 2 个操作项（选择滤镜 / 开启·关闭滤镜）
-//   + 1 个说明项（关于本插件）
-//   33 + 3*33 + 6*70 = 552 ≤ 557 → 整页放得下，「关于」入口不会被裁。
-//   ⚠ 3 个小标题下**最多 6 项**（再加一项就是 622 > 557，底行被切）。
-//   已删除的两行（曾把页面顶到 8 项 = 692px）:
-//     「生效方式 / 立即生效」 —— 与 OverlayFrame 副标题「· 按下即生效」重复
-//     「适用游戏 / 全部通用」 —— 作者原注释已写明该由「关于」取代
-//   理由与算式见 gui.cpp「说明与关于」处的注释。
-inline constexpr int MAIN_HEADERS = 3;
-inline constexpr int MAIN_ITEMS   = 6;
+// 主页面: 2 个小标题 + 5 个列表项 + 1 个滑动条
+//   · 当前画面: 滤镜 / 效果
+//   · 操作:     选择滤镜 / 开启·关闭滤镜 / 变暗超时（滑动条）/ 关于本插件
+//   33 + 2*33 + 5*70 + 1*83 = 532 ≤ 557 → 整页放得下。
+//
+//   为什么小标题从 3 个减到 2 个:
+//     滑动条高度是 83（比 ListItem 多 13px）。若仍保留 3 个小标题，
+//     33 + 3*33 + 5*70 + 83 = 565 > 557，最后一行会被裁掉。
+//   因此「关于本插件」并入「操作」区，不再单独设「使用说明」小标题；
+//   「作用于」（显示当前档位）为腾出行高被移除。
+//
+//   ⚠ 加滑动条时别忘 MAIN_SLIDERS —— 它参与高度预算与两条断言。
+inline constexpr int MAIN_HEADERS = 2;
+inline constexpr int MAIN_ITEMS   = 5;
+inline constexpr int MAIN_SLIDERS = 1;
 
 // 预设页: 7 个分类小标题 + 30 个预设
 // 预设页现在是**下拉式**: 默认只显示分组行，展开后才有子项。

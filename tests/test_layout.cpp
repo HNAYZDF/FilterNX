@@ -204,11 +204,12 @@ int main(int argc, char **argv) {
                   src.find("refresh_state") != std::string::npos,
                   "update() 中调用了 refresh_state() 回读真实状态");
 
-            // ③ 三项状态必须存为可更新指针，而不是一次性 addItem
+            // ③ 状态行必须存为可更新指针，而不是一次性 addItem。
+            //    5.3.0 起「作用于」被去掉（腾出高度放变暗超时滑动条），
+            //    所以这里只要求「滤镜」「效果」两项。
             check(src.find("g_filter_item") != std::string::npos &&
-                  src.find("g_effect_item") != std::string::npos &&
-                  src.find("g_profile_item") != std::string::npos,
-                  "「当前画面」三项存为指针，可在 update() 里 setValue");
+                  src.find("g_effect_item") != std::string::npos,
+                  "「当前画面」状态行存为指针，可在 update() 里 setValue");
 
             // ④ 必须用 setValue 更新文本（这是 ListItem 的公开接口）
             check(src.find("->setValue(") != std::string::npos,
@@ -339,10 +340,11 @@ int main(int argc, char **argv) {
     // 720 下可见高度 = 557。
     printf("\n[每页高度预算]\n");
     {
-        const int main_h = height_budget(MAIN_HEADERS, MAIN_ITEMS);
-        printf("        主页面: 首项偏移%d + %d小标题*%d + %d项*%d = %d px (可见 %d)\n",
+        const int main_h = height_budget(MAIN_HEADERS, MAIN_ITEMS, MAIN_SLIDERS);
+        printf("        主页面: 首项偏移%d + %d小标题*%d + %d项*%d + %d滑动条*%d = %d px (可见 %d)\n",
                FIRST_ITEM_OFFSET, MAIN_HEADERS, HEADER_HEIGHT,
-               MAIN_ITEMS, ITEM_HEIGHT, main_h, VISIBLE_HEIGHT);
+               MAIN_ITEMS, ITEM_HEIGHT, MAIN_SLIDERS, SLIDER_HEIGHT,
+               main_h, VISIBLE_HEIGHT);
 
         // ① 整页必须放得下 —— 主页面是"一屏看全"的页面:
         //    它没有"滚动到底"的引导，掉到裁剪区外的行用户基本发现不了。
@@ -361,9 +363,11 @@ int main(int argc, char **argv) {
         //       首屏内容 = 前 2 个小标题 + 前 5 个列表项
         //                = 33 + 2*33 + 5*70 = 482 ≤ 557
         //    （即 3 个状态行 + 2 个操作项一定看得见。）
+        // 滑动条高度 83 ≠ ListItem 的 70，必须单算
         const int main_first_screen =
-            FIRST_ITEM_OFFSET + 2 * HEADER_HEIGHT + 5 * ITEM_HEIGHT;
-        printf("        主页面首屏（3 状态行 + 2 操作项）: %d px\n", main_first_screen);
+            FIRST_ITEM_OFFSET + 2 * HEADER_HEIGHT + MAIN_ITEMS * ITEM_HEIGHT
+            + MAIN_SLIDERS * SLIDER_HEIGHT;
+        printf("        主页面首屏（状态行 + 操作项 + 滑动条 + 关于）: %d px\n", main_first_screen);
         check(main_first_screen <= VISIBLE_HEIGHT,
               "主页面首屏含全部状态行与操作项（关键入口不会被裁掉）");
 

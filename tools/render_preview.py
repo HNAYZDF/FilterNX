@@ -236,6 +236,35 @@ def draw_item(d, y, name, value, selected=False):
     return y + ITEM_HEIGHT
 
 
+def draw_slider(d, y, label, value, progress):
+    """TrackBar / NamedStepTrackBar: 高度 83（比 ListItem 高 13px）
+
+    上方是「标签 ... 当前值」，下方是轨道与圆点。
+    高度常数必须与 layout.hpp 的 SLIDER_HEIGHT 一致，否则预览会少算高度。
+    """
+    d.text((19 * SCALE, (y + 14) * SCALE), label, font=font(False, FS_ITEM),
+           fill=COL_TEXT)
+    if value:
+        f = font(False, FS_VALUE)
+        w = d.textlength(value, font=f)
+        d.text(((PANEL_W - 26) * SCALE - w, (y + 16) * SCALE), value, font=f,
+               fill=COL_VALUE)
+
+    track_y = y + 56
+    d.rounded_rectangle([34 * SCALE, (track_y - 2) * SCALE,
+                         (PANEL_W - 34) * SCALE, (track_y + 2) * SCALE],
+                        radius=2 * SCALE, fill=COL_SEP)
+    knob_x = 34 + (PANEL_W - 68) * (progress / 100.0)
+    d.ellipse([(knob_x - 9) * SCALE, (track_y - 9) * SCALE,
+               (knob_x + 9) * SCALE, (track_y + 9) * SCALE],
+              fill=COL_VALUE)
+
+    d.line([(4 * SCALE, (y + 83) * SCALE),
+            ((PANEL_W + 10) * SCALE, (y + 83) * SCALE)],
+           fill=COL_SEP, width=1 * SCALE)
+    return y + 83
+
+
 def draw_footer(d):
     y = (PANEL_H - 73 + 6) * SCALE
     d.line([(0, y - 6 * SCALE), (PANEL_W * SCALE, y - 6 * SCALE)],
@@ -277,15 +306,13 @@ def build_main_page():
     y = draw_header(dl, y, "当前画面")
     y = draw_item(dl, y, "滤镜", "已开启")
     y = draw_item(dl, y, "效果", "鲜艳", selected=True)
-    y = draw_item(dl, y, "作用于", "档位1")
 
     y = draw_header(dl, y, "操作")
     y = draw_item(dl, y, "选择滤镜", f"共{preset_count()}种")
     y = draw_item(dl, y, "关闭滤镜", "恢复画面")
-
-    y = draw_header(dl, y, "使用说明")
-    # 与 gui.cpp 同步：这一行已由「关于本插件」改为「设置」入口
-    y = draw_item(dl, y, "设置", "变暗/关于")
+    # 变暗超时滑动条（5 分钟档）：高度 83，与 layout.hpp 的 SLIDER_HEIGHT 对齐
+    y = draw_slider(dl, y, "变暗超时", "5分", 100 * 2 / 5)
+    y = draw_item(dl, y, "关于本插件", author_name())
 
     return compose(img, d, layer)
 
@@ -335,24 +362,6 @@ def build_info_page():
     return compose(img, d, layer)
 
 
-def build_settings_page():
-    """设置页（5.1.0 新增）—— 变暗超时入口。
-
-    单独出一张图，不塞进三页总览（总览图名与布局已被交付脚本引用）。
-    """
-    img, d, layer, dl = new_page()
-    title, sub = overlay_frame("设置")
-    draw_title(d, title, sub)
-
-    y = 97
-    y = draw_header(dl, y, "显示")
-    y = draw_item(dl, y, "变暗超时", "5分钟", selected=True)
-    y = draw_header(dl, y, "关于")
-    y = draw_item(dl, y, "关于本插件", author_name())
-
-    return compose(img, d, layer)
-
-
 def main():
     outdir = Path(sys.argv[1]) if len(sys.argv) > 1 else (ROOT / "preview")
     outdir.mkdir(parents=True, exist_ok=True)
@@ -380,12 +389,6 @@ def main():
     sheet_path = outdir / "00-三页总览.png"
     sheet.save(sheet_path)
     print(f"  {sheet_path}  ({sheet.size[0]}x{sheet.size[1]})")
-
-    # 设置页单独一张（5.1.0 新增）
-    settings = build_settings_page().resize((PANEL_W, PANEL_H), Image.LANCZOS)
-    sp = outdir / "04-设置页.png"
-    settings.save(sp)
-    print(f"  {sp}  ({settings.size[0]}x{settings.size[1]})")
 
     return 0
 

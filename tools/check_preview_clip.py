@@ -38,6 +38,7 @@ def main():
     ITEM = const("ITEM_HEIGHT", t)
     HEADER = const("HEADER_HEIGHT", t)
     OFFSET = const("FIRST_ITEM_OFFSET", t)
+    SLIDER = const("SLIDER_HEIGHT", t)
 
     # List 的真实裁剪矩形（tesla.hpp List::draw）:
     #     enableScissoring(0, 88, FramebufferWidth, FramebufferHeight - 73 - 97 + 2 + 5)
@@ -50,24 +51,25 @@ def main():
     limit = SCISSOR_BOTTOM
 
     pages = [
-        ("主页面", const("MAIN_HEADERS", t), const("MAIN_ITEMS", t), True),
-        ("滤镜列表", const("PRESET_HEADERS", t), const("PRESET_ITEMS", t), False),
-        ("关于", const("INFO_HEADERS", t), const("INFO_ITEMS", t), False),
+        ("主页面", const("MAIN_HEADERS", t), const("MAIN_ITEMS", t),
+         const("MAIN_SLIDERS", t), True),
+        ("滤镜列表", const("PRESET_HEADERS", t), const("PRESET_ITEMS", t), 0, False),
+        ("关于", const("INFO_HEADERS", t), const("INFO_ITEMS", t), 0, False),
     ]
 
     print("=== 各页裁剪检查 ===")
     print(f"  裁剪矩形: y ∈ [{SCISSOR_TOP}, {SCISSOR_BOTTOM}]"
           f"  (起点 {SCISSOR_TOP} + 高度 {SCISSOR_H})")
     print(f"  列表内容起点 y={list_start}，可用高度 {limit - list_start}px")
-    print(f"  单项: 小标题 {HEADER}px / 列表项 {ITEM}px")
+    print(f"  单项: 小标题 {HEADER}px / 列表项 {ITEM}px / 滑动条 {SLIDER}px")
     print()
 
     bad = 0
-    for name, headers, items, must_fit in pages:
-        end = list_start + headers * HEADER + items * ITEM
+    for name, headers, items, sliders, must_fit in pages:
+        end = list_start + headers * HEADER + items * ITEM + sliders * SLIDER
         fits = end <= limit
         status = "[OK] 完整可见" if fits else "[--] 需滚动（正常，但底部会裁）"
-        print(f"  {name:6}  {headers} 小标题 + {items} 项"
+        print(f"  {name:6}  {headers} 小标题 + {items} 项 + {sliders} 滑动条"
               f"  → 结束于 y={end}  {status}")
 
         if must_fit and not fits:
@@ -76,7 +78,8 @@ def main():
     print()
 
     # 主页面必须完全放得下（它没有"滚动到底"的引导，用户可能不知道要滚）
-    main_end = list_start + const("MAIN_HEADERS", t) * HEADER + const("MAIN_ITEMS", t) * ITEM
+    main_end = (list_start + const("MAIN_HEADERS", t) * HEADER
+                + const("MAIN_ITEMS", t) * ITEM + const("MAIN_SLIDERS", t) * SLIDER)
     print(f"  主页面结束 y={main_end} ≤ {limit} ? {main_end <= limit}")
     if main_end > limit:
         print("  ★ 主页面会被裁剪 —— 用户可能看不到「关于」入口")

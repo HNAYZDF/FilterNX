@@ -51,11 +51,37 @@ namespace {
 struct LiveState {
     bool          service_ok = false;
     bool          active     = false;
+    // 当前模式下**实际生效**的档位（掌机看 handheld，底座看 docked）
     std::uint32_t profile_id = PROFILE_1;
+    // config.ini 里 handheld_profile / docked_profile 各自绑定的档位。
+    // 两者可以不同 —— 早年只写 handheld，导致底座模式滤镜不生效。
+    std::uint32_t handheld_profile_id = PROFILE_1;
+    std::uint32_t docked_profile_id   = PROFILE_1;
     FzProfile     profile    = {};
 };
 
 LiveState g_state;
+
+// 当前是否底座模式（TV / 外接显示）
+bool is_docked_mode() {
+    return appletGetOperationMode() != AppletOperationMode_Handheld;
+}
+
+// 读出「掌机」「底座」各自绑定的档位。
+//
+// 对应 config.ini 的 handheld_profile / docked_profile，
+// 由 Fizeau 的 GetActiveProfileId(is_external) 返回。
+bool read_mode_profiles(std::uint32_t *handheld, std::uint32_t *docked) {
+    std::uint32_t h = PROFILE_1, d = PROFILE_1;
+    if (R_FAILED(fzGetActiveProfileId(false, &h)))
+        return false;
+    if (R_FAILED(fzGetActiveProfileId(true, &d)))
+        return false;
+
+    *handheld = (h < PROFILE_TOTAL) ? h : PROFILE_1;
+    *docked   = (d < PROFILE_TOTAL) ? d : PROFILE_1;
+    return true;
+}
 
 /*
  * 刷新 Fizeau 状态 —— **只读，绝不建立新连接**
@@ -162,9 +188,13 @@ bool refresh_state() {
     if (R_SUCCEEDED(fzGetIsActive(&active)))
         g_state.active = active;
 
-    std::uint32_t pid = PROFILE_1;
-    if (R_SUCCEEDED(fzGetActiveProfileId(false, &pid)) && pid < PROFILE_TOTAL)
-        g_state.profile_id = pid;
+    // 读两个模式各自绑定的档位；界面显示的「作用于」跟随当前模式。
+    std::uint32_t h = PROFILE_1, d = PROFILE_1;
+    if (read_mode_profiles(&h, &d)) {
+        g_state.handheld_profile_id = h;
+        g_state.docked_profile_id   = d;
+        g_state.profile_id = is_docked_mode() ? d : h;
+    }
 
     // 只有读取成功才覆盖快照；失败时保留上一次的有效值，
     // 而不是让全零数据污染后续判断。
@@ -209,18 +239,6 @@ std::uint32_t dimming_seconds_now() {
     return 60u * static_cast<std::uint32_t>(t.m) + static_cast<std::uint32_t>(t.s);
 }
 
-// 显示用文本。命中预设档位就用档位标签，否则显示精确值。
-const char *dimming_label() {
-    const std::uint32_t sec = dimming_seconds_now();
-    for (std::size_t i = 0; i < DIMMING_COUNT; ++i)
-        if (DIMMING_OPTIONS[i].minutes * 60u == sec)
-            return DIMMING_OPTIONS[i].label;
-
-    static char buf[24];
-    std::snprintf(buf, sizeof(buf), "%u分%u秒", sec / 60u, sec % 60u);
-    return buf;
-}
-
 // 写入并持久化。返回 false 表示「运行态生效了但没写进卡」（或整体失败）。
 bool apply_dimming_minutes(std::uint16_t minutes) {
     if (!g_state.service_ok)
@@ -228,13 +246,23 @@ bool apply_dimming_minutes(std::uint16_t minutes) {
     if (R_FAILED(fzInitialize()))
         return false;
 
-    FzProfile prof = {};
-    if (R_FAILED(fzGetProfile(g_state.profile_id, &prof)))
+    // 与滤镜一样，掌机与底座两个档位都要写 —— 否则换个模式调光又变了
+    std::uint32_t ids[2] = { g_state.profile_id, g_state.profile_id };
+    if (!read_mode_profiles(&ids[0], &ids[1]))
         return false;
 
-    prof.dimming_timeout = FzTime{0, static_cast<std::uint8_t>(minutes), 0};
-    if (R_FAILED(fzSetProfile(g_state.profile_id, prof)))
-        return false;
+    for (std::size_t i = 0; i < 2; ++i) {
+        if (i == 1 && ids[1] == ids[0])
+            continue;
+
+        FzProfile prof = {};
+        if (R_FAILED(fzGetProfile(ids[i], &prof)))
+            return false;
+
+        prof.dimming_timeout = FzTime{0, static_cast<std::uint8_t>(minutes), 0};
+        if (R_FAILED(fzSetProfile(ids[i], prof)))
+            return false;
+    }
 
     refresh_state();
     return fzSaveConfigToSd();
@@ -245,22 +273,34 @@ bool apply_preset(const Preset &p) {
     if (R_FAILED(fzInitialize()))
         return false;
 
-    const std::uint32_t pid = g_state.profile_id;
-
-    // 先读回现状再改。
+    // ⚠ 必须**同时写掌机与底座两个档位**。
     //
-    // ⚠ 读失败**必须直接返回失败**，不能像以前那样 "prof = {}" 兜底继续:
-    //   那样会把一份全零 profile 写下去，用户原有的黄昏/黎明时刻与
-    //   调光超时就被静默清掉了（与 fzFillProfile 只改色彩字段的约定相反）。
-    //   宁可这次不生效，也不能悄悄破坏 profile 的其它字段。
-    FzProfile prof = {};
-    if (R_FAILED(fzGetProfile(pid, &prof)))
+    // Fizeau 按 config.ini 的 handheld_profile / docked_profile 分别取档位。
+    // 早年这里只写 is_external=false（掌机），于是拔插底座后滤镜不生效 ——
+    // 用户得手动打开 Fizeau 界面把「显示配置」切到同一个档位才行。
+    std::uint32_t ids[2] = { g_state.profile_id, g_state.profile_id };
+    if (!read_mode_profiles(&ids[0], &ids[1]))
         return false;
 
-    fzFillProfile(&prof, p.settings, p.components, p.filter);
+    for (std::size_t i = 0; i < 2; ++i) {
+        if (i == 1 && ids[1] == ids[0])
+            continue;   // 两个模式绑同一个档位，写一次就够
 
-    if (R_FAILED(fzSetProfile(pid, prof)))
-        return false;
+        // 先读回现状再改。
+        //
+        // ⚠ 读失败**必须直接返回失败**，不能像以前那样 "prof = {}" 兜底继续:
+        //   那样会把一份全零 profile 写下去，用户原有的黄昏/黎明时刻与
+        //   调光超时就被静默清掉了（与 fzFillProfile 只改色彩字段的约定相反）。
+        //   宁可这次不生效，也不能悄悄破坏 profile 的其它字段。
+        FzProfile prof = {};
+        if (R_FAILED(fzGetProfile(ids[i], &prof)))
+            return false;
+
+        fzFillProfile(&prof, p.settings, p.components, p.filter);
+
+        if (R_FAILED(fzSetProfile(ids[i], prof)))
+            return false;
+    }
 
     // 确保总开关打开，否则用户看不到任何变化
     if (!g_state.active) {
@@ -288,8 +328,11 @@ bool apply_preset(const Preset &p) {
 
 namespace {
 bool          g_preview_active = false;
-FzProfile     g_preview_saved  = {};
-std::uint32_t g_preview_pid    = PROFILE_1;
+// 预览会把**掌机与底座两个档位**一起改（见 apply_preset），
+// 所以基准也必须存两份；只存一份的话，退出预设页会留下另一个档位被污染。
+FzProfile     g_preview_saved[2] = {};
+std::uint32_t g_preview_ids[2]   = { PROFILE_1, PROFILE_1 };
+std::size_t   g_preview_count    = 0;
 
 /*
  * 「用户刚刚移动了光标」—— 预览只在它为 true 时触发。
@@ -392,13 +435,25 @@ void begin_preview() {
     if (R_FAILED(fzInitialize()))
         return;
 
-    g_preview_pid = g_state.profile_id;
-    FzProfile cur = {};
-    if (R_FAILED(fzGetProfile(g_preview_pid, &cur)))
+    std::uint32_t ids[2] = { PROFILE_1, PROFILE_1 };
+    if (!read_mode_profiles(&ids[0], &ids[1]))
         return;
 
-    g_preview_saved  = cur;
-    g_preview_active = true;
+    g_preview_count = 0;
+    for (std::size_t i = 0; i < 2; ++i) {
+        if (i == 1 && ids[1] == ids[0])
+            continue;
+
+        FzProfile cur = {};
+        if (R_FAILED(fzGetProfile(ids[i], &cur)))
+            return;      // 读不全就不进会话，避免只存一半、退出时恢复错
+
+        g_preview_ids[g_preview_count]   = ids[i];
+        g_preview_saved[g_preview_count] = cur;
+        ++g_preview_count;
+    }
+
+    g_preview_active = (g_preview_count > 0);
     fnx::fnxLog("[gui] 预览: 已保存原设置（会话开始）");
 }
 
@@ -412,7 +467,14 @@ void end_preview() {
         fnx::fnxLog("[gui] 预览: 恢复失败（无会话）");
         return;
     }
-    if (R_FAILED(fzSetProfile(g_preview_pid, g_preview_saved)))
+
+    bool failed = false;
+    for (std::size_t i = 0; i < g_preview_count; ++i) {
+        if (R_FAILED(fzSetProfile(g_preview_ids[i], g_preview_saved[i])))
+            failed = true;
+    }
+
+    if (failed)
         fnx::fnxLog("[gui] 预览: 恢复失败（写回出错）");
     else
         fnx::fnxLog("[gui] 预览: 已恢复原设置（会话结束）");
@@ -527,7 +589,6 @@ std::string current_description() {
 namespace {
 tsl::elm::ListItem *g_filter_item  = nullptr;
 tsl::elm::ListItem *g_effect_item  = nullptr;
-tsl::elm::ListItem *g_profile_item = nullptr;
 
 // 回读间隔（帧）。不每帧都读: IPC 虽轻但每秒 60 次没有意义，
 // 而且会让状态文字频繁闪动。30 帧 ≈ 0.5 秒。
@@ -539,78 +600,7 @@ std::string filter_state_text() {
     return g_state.active ? "已开启" : "已关闭";
 }
 
-std::string profile_text() {
-    char buf[16];
-    std::snprintf(buf, sizeof(buf), "档位%u", g_state.profile_id + 1);
-    return buf;
-}
 } // namespace
-
-/*
- * SettingsGui —— 设置页
- *
- * 为什么单独一页而不是塞进主页面:
- *   主页面已经是 3 小标题 + 6 项 = 552px，可见区只有 557px，
- *   再加一行就是 622px，底行会被裁剪（历史上踩过）。
- *   所以把「关于本插件」这一行升级为「设置」入口，新页里既放变暗超时，
- *   也保留原来的「关于」入口 —— 主页行数不变，布局约束不受影响。
- *
- * 变暗超时用「点一下循环切换」而不是滑块:
- *   档位少（6 个），循环切换不容易误触，也不需要额外的子页面；
- *   非预设值（用户在相册版里精确调过）会显示成 "M分S秒"，第一次点击会
- *   回到预设档位的第一项。
- */
-class SettingsGui : public tsl::Gui {
-    public:
-        tsl::elm::Element *createUI() override {
-            auto *frame = new tsl::elm::OverlayFrame("设置", "变暗超时 · 关于");
-            auto *list  = new tsl::elm::List();
-
-            list->addItem(new tsl::elm::CategoryHeader("显示"));
-
-            auto *dim = new tsl::elm::ListItem("变暗超时", dimming_label());
-            dim->setClickListener([dim](u64 keys) -> bool {
-                if (!(keys & HidNpadButton_A))
-                    return false;
-
-                if (!g_state.service_ok) {
-                    tsl::notification->showNow("未连接 Fizeau", 26, "无法修改");
-                    return true;
-                }
-
-                const std::uint32_t sec = dimming_seconds_now();
-                std::size_t idx = 0;
-                for (std::size_t i = 0; i < DIMMING_COUNT; ++i) {
-                    if (DIMMING_OPTIONS[i].minutes * 60u == sec) {
-                        idx = i;
-                        break;
-                    }
-                }
-                idx = (idx + 1) % DIMMING_COUNT;
-
-                const bool saved = apply_dimming_minutes(DIMMING_OPTIONS[idx].minutes);
-                dim->setValue(dimming_label());
-                tsl::notification->showNow(DIMMING_OPTIONS[idx].label, 26,
-                                           saved ? "已设置·已保存" : "已设置·重启失效");
-                return true;
-            });
-            list->addItem(dim);
-
-            list->addItem(new tsl::elm::CategoryHeader("关于"));
-            auto *about = new tsl::elm::ListItem("关于本插件", "hnayzdf");
-            about->setClickListener([](u64 keys) -> bool {
-                if (keys & HidNpadButton_A) {
-                    tsl::changeTo<InfoGui>();
-                    return true;
-                }
-                return false;
-            });
-            list->addItem(about);
-
-            frame->setContent(list);
-            return frame;
-        }
-};
 
 tsl::elm::Element *MainGui::createUI() {
     // ═══════════════════════════════════════════════════════════════════════
@@ -720,7 +710,7 @@ tsl::elm::Element *MainGui::createUI() {
     //   拿空句柄发请求直接把整个特斯拉菜单搞崩。现在 IPC 层有会话守卫，
     //   而且刷新逻辑也做了结构性隔离，这个引导页才真正能显示出来。
     if (!g_state.service_ok) {
-        g_filter_item = g_effect_item = g_profile_item = nullptr;
+        g_filter_item = g_effect_item = nullptr;
 
         auto *frame = new tsl::elm::OverlayFrame("超能滤镜", FNX_VERSION_LABEL " · 未连接");
         auto *list  = new tsl::elm::List();
@@ -791,9 +781,6 @@ tsl::elm::Element *MainGui::createUI() {
     g_effect_item = new tsl::elm::ListItem("效果", current_description());
     list->addItem(g_effect_item);
 
-    g_profile_item = new tsl::elm::ListItem("作用于", profile_text());
-    list->addItem(g_profile_item);
-
     // ── 操作 ──
     list->addItem(new tsl::elm::CategoryHeader("操作"));
 
@@ -838,39 +825,64 @@ tsl::elm::Element *MainGui::createUI() {
     });
     list->addItem(toggle);
 
-    // ── 说明与关于 ──
+    // ── 变暗超时（滑动条）──
     //
-    // 行数必须与 layout.hpp 的 MAIN_HEADERS / MAIN_ITEMS 一致（本页共 6 项）:
-    //   33(首项偏移) + 3*33(小标题) + 6*70(列表项) = 552 ≤ 557  → 整页放得下
+    // 直接放在「操作」区：左右推一格改一档，不必再进二级页面点按。
+    // 档位 0 = 跟随系统（写入 00:00），其余是分钟数。
     //
-    // ⚠ 这里**只能有一行**。曾经有两行额外的说明项:
-    //     「生效方式 / 立即生效」 —— 与本页副标题「· 按下即生效」重复
-    //     「适用游戏 / 全部通用」 —— 作者已决定用「关于」取代它（却没删）
-    //   两行一起把主页面顶到 8 项 = 692px > 557px，于是:
-    //     · 「关于本插件」掉到裁剪区外 —— 用户找不到作者与 QQ 群的入口
-    //     · 「适用游戏」被裁剪矩形从中间切开 —— 底部半行残影
-    //   由 tools/check_preview_clip.py（主页面必须完整可见）与
-    //   tests/test_layout.cpp（整页高度 ≤ VISIBLE_HEIGHT）两条断言守着。
-    //   要再加行请先算高度: 3 小标题下最多 6 项。
-    // QQ 群等长文本放在独立的 InfoGui 页（那里不受值列宽度限制）。
-    list->addItem(new tsl::elm::CategoryHeader("使用说明"));
+    // ⚠ 步进名必须与 DIMMING_OPTIONS **数量、顺序一一对应**
+    //   （框架只接受 initializer_list，没法直接把数组传进去）。
+    //   改档位时两处要一起改。
+    {
+        auto *bar = new tsl::elm::NamedStepTrackBar(
+            "", { "系统", "1分", "5分", "10分", "30分", "60分" }, true, "变暗超时");
 
-    // 设置入口（原「关于本插件」行）。
+        const std::uint32_t sec = dimming_seconds_now();
+        std::size_t idx = 0;
+        for (std::size_t i = 0; i < DIMMING_COUNT; ++i) {
+            if (DIMMING_OPTIONS[i].minutes * 60u == sec) {
+                idx = i;
+                break;
+            }
+        }
+        bar->setProgress(static_cast<u16>(idx));
+
+        bar->setValueChangedListener([](u16 v) {
+            if (v >= DIMMING_COUNT)
+                return;
+            if (!g_state.service_ok) {
+                tsl::notification->showNow("未连接 Fizeau", 26, "无法修改");
+                return;
+            }
+            const bool saved = apply_dimming_minutes(DIMMING_OPTIONS[v].minutes);
+            tsl::notification->showNow(DIMMING_OPTIONS[v].label, 26,
+                                       saved ? "已设置·已保存" : "已设置·重启失效");
+        });
+        list->addItem(bar);
+    }
+
+    // ── 关于 ──
     //
-    // 为什么把它改成「设置」而不是再加一行:
-    //   本页 3 小标题 + 6 项 = 552px，可见区 557px，再加一行就 622px 会被裁剪。
-    //   所以把这一行升级成入口，把「关于本插件」挪进设置页 —— 行数不变。
+    // ⚠ 高度预算（本页共 2 小标题 + 5 项 + 1 个滑动条）:
+    //     33(首项偏移) + 2*33(小标题) + 5*70(列表项) + 83(滑动条) = 532 ≤ 557 ✓
     //
-    // 值 "变暗/关于" 4 个字符，宽度与原来 "hnayzdf" 相当，不会触发滚动。
-    auto *settings = new tsl::elm::ListItem("设置", "变暗/关于");
-    settings->setClickListener([](u64 keys) -> bool {
+    //   滑动条（TrackBar）高度是 83，不是 ListItem 的 70 ——
+    //   这也是这里只能保留 **2 个小标题** 的原因：若仍用 3 个，
+    //   33 + 3*33 + 5*70 + 83 = 565 > 557，最后一行会被裁掉。
+    //   所以「关于本插件」并入「操作」区，不再单独加「使用说明」小标题。
+    //
+    //   由 tools/check_preview_clip.py 与 tests/test_layout.cpp 两条断言守着；
+    //   改行数/加滑动条时请同步改 layout.hpp 的 MAIN_HEADERS / MAIN_ITEMS /
+    //   MAIN_SLIDERS。
+    auto *about = new tsl::elm::ListItem("关于本插件", "hnayzdf");
+    about->setClickListener([](u64 keys) -> bool {
         if (keys & HidNpadButton_A) {
-            tsl::changeTo<SettingsGui>();
+            tsl::changeTo<InfoGui>();
             return true;
         }
         return false;
     });
-    list->addItem(settings);
+    list->addItem(about);
 
     frame->setContent(list);
     return frame;
@@ -913,7 +925,6 @@ void MainGui::update() {
     if (!g_state.service_ok) {
         if (g_filter_item) g_filter_item->setValue(filter_state_text());
         if (g_effect_item) g_effect_item->setValue("—");
-        if (g_profile_item) g_profile_item->setValue("—");
         return;
     }
 
@@ -928,10 +939,6 @@ void MainGui::update() {
     if (g_effect_item) {
         const std::string v = current_description();
         if (g_effect_item->getValue() != v) g_effect_item->setValue(v);
-    }
-    if (g_profile_item) {
-        const std::string v = profile_text();
-        if (g_profile_item->getValue() != v) g_profile_item->setValue(v);
     }
 }
 
