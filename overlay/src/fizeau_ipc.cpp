@@ -428,9 +428,21 @@ std::string profileSection(const std::string &tag, const FzProfile &p) {
     s += "luminance_night   = " + f(p.night_settings.luminance)  + "\n";
     s += "range_day         = " + fmtRange(p.day_settings.range)   + "\n";
     s += "range_night       = " + fmtRange(p.night_settings.range) + "\n";
-    // 官方这一行只写分:秒（h 被丢弃），照抄，避免与官方产物不一致
-    s += "dimming_timeout   = " + fmtTime(FzTime{0, p.dimming_timeout.m,
-                                                    p.dimming_timeout.s}) + "\n";
+    // ── dimming_timeout：ini 里是 MM:SS，必须「分钟→h、秒→m」再格式化 ──
+    //
+    // Fizeau 的 Time 是 {h, m, s}，to_timestamp = 3600*h + 60*m + s。
+    // ini 解析那一侧是：
+    //     config->profile.dimming_timeout = { 0, t.h, t.m };
+    // 即 "MM:SS" 被读进 m=分钟、s=秒。
+    // 官方写盘用的是 format_time({ m, s }) —— 聚合初始化把 m 放进 h、s 放进 m，
+    // 于是 "%02d:%02d"(h,m) 正好输出 "MM:SS"。
+    //
+    // ⚠ 5.0.1 曾误写成 fmtTime(FzTime{0, m, s})：h 置 0、m 放分钟，
+    //   结果输出 "00:MM" —— 5 分钟的调光超时被写成 00:05（5 秒），
+    //   重启后 Fizeau 按 5 秒触发调光，表现为「休眠前亮度突然掉下去」。
+    //   这里必须与官方同构：把分钟放到 h、秒放到 m。
+    s += "dimming_timeout   = " + fmtTime(FzTime{p.dimming_timeout.m,
+                                                p.dimming_timeout.s, 0}) + "\n";
     s += "\n";
     return s;
 }

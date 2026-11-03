@@ -19,7 +19,9 @@ export DEVKITPRO=/c/msys64/opt/devkitpro
 export DEVKITA64=$DEVKITPRO/devkitA64
 export PATH="/usr/bin:$DEVKITPRO/tools/bin:$DEVKITA64/bin:$PATH"
 
-ROOT=/c/Users/hnayz/Documents/deepseek-harness/default-workspace/filternx
+# 工具脚本在 tools/ 下，根目录是它上一级；用脚本自身位置定位，
+# 避免工作区迁移后仍去旧路径构建。
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT/overlay" || { echo "无法进入 overlay/"; exit 1; }
 
 echo "### PWD=$(pwd)"

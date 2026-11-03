@@ -22,7 +22,10 @@
 # ═══════════════════════════════════════════════════════════════════════════
 set -e
 
-ROOT=/c/Users/hnayz/Documents/deepseek-harness/default-workspace/filternx
+# 用脚本自身位置定位工程根目录 —— 不再硬编码绝对路径。
+# （工作区曾从 C:\...\default-workspace 迁到 F:\ai\default-workspace，
+#   硬编码路径会让构建/打包静默地在旧目录里执行。）
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DIST=$ROOT/dist
 PY=/c/Users/hnayz/.dsh/dsh-runtimes/dsh-primary-runtime/dependencies/python/python.exe
 

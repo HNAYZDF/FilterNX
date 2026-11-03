@@ -159,8 +159,8 @@ static std::string find_source(const char *rel) {
         "../overlay/",
         // 从 tests/build/ 目录运行
         "../../overlay/",
-        // 绝对回退
-        "C:/Users/hnayz/Documents/deepseek-harness/default-workspace/filternx/overlay/",
+        // 绝对回退（工作区迁移后更新；正常路径由上面的相对项覆盖）
+        "F:/ai/default-workspace/filternx/overlay/",
     };
 
     for (const char *c : candidates) {
