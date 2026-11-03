@@ -181,6 +181,65 @@ bool refresh_state() {
 }
 
 
+// ══════════════════════════════════════════════════════════ 变暗超时
+//
+// Fizeau 的 dimming_timeout 语义是「无输入多少秒后把画面调暗」，
+// 在 ini 里写成 MM:SS，解析侧是 {0, MM, SS}（分钟进 m、秒进 s）。
+//
+// 为什么要在插件里给入口:
+//   · 相册版需要退出游戏才能开；
+//   · 5.0.1 曾把 5 分钟误写成 5 秒（见 CHANGELOG），这个入口让用户能自纠。
+//
+// ⚠ 写入必须是 {0, 分钟, 0} —— 分钟放 m 位。写成 {0, 0, 分钟} 会变成秒。
+struct DimmingOption {
+    const char  *label;
+    std::uint16_t minutes;   // 0 = 跟随系统（写 00:00）
+};
+
+inline constexpr DimmingOption DIMMING_OPTIONS[] = {
+    { "跟随系统", 0 }, { "1分钟", 1 },  { "5分钟",  5 },
+    { "10分钟", 10 },  { "30分钟", 30 }, { "60分钟", 60 },
+};
+inline constexpr std::size_t DIMMING_COUNT =
+    sizeof(DIMMING_OPTIONS) / sizeof(DIMMING_OPTIONS[0]);
+
+// 当前调光超时（秒）；0 表示跟随系统
+std::uint32_t dimming_seconds_now() {
+    const auto &t = g_state.profile.dimming_timeout;
+    return 60u * static_cast<std::uint32_t>(t.m) + static_cast<std::uint32_t>(t.s);
+}
+
+// 显示用文本。命中预设档位就用档位标签，否则显示精确值。
+const char *dimming_label() {
+    const std::uint32_t sec = dimming_seconds_now();
+    for (std::size_t i = 0; i < DIMMING_COUNT; ++i)
+        if (DIMMING_OPTIONS[i].minutes * 60u == sec)
+            return DIMMING_OPTIONS[i].label;
+
+    static char buf[24];
+    std::snprintf(buf, sizeof(buf), "%u分%u秒", sec / 60u, sec % 60u);
+    return buf;
+}
+
+// 写入并持久化。返回 false 表示「运行态生效了但没写进卡」（或整体失败）。
+bool apply_dimming_minutes(std::uint16_t minutes) {
+    if (!g_state.service_ok)
+        return false;
+    if (R_FAILED(fzInitialize()))
+        return false;
+
+    FzProfile prof = {};
+    if (R_FAILED(fzGetProfile(g_state.profile_id, &prof)))
+        return false;
+
+    prof.dimming_timeout = FzTime{0, static_cast<std::uint8_t>(minutes), 0};
+    if (R_FAILED(fzSetProfile(g_state.profile_id, prof)))
+        return false;
+
+    refresh_state();
+    return fzSaveConfigToSd();
+}
+
 // 把设置写入 Fizeau 并立即生效
 bool apply_preset(const Preset &p) {
     if (R_FAILED(fzInitialize()))
@@ -487,6 +546,72 @@ std::string profile_text() {
 }
 } // namespace
 
+/*
+ * SettingsGui —— 设置页
+ *
+ * 为什么单独一页而不是塞进主页面:
+ *   主页面已经是 3 小标题 + 6 项 = 552px，可见区只有 557px，
+ *   再加一行就是 622px，底行会被裁剪（历史上踩过）。
+ *   所以把「关于本插件」这一行升级为「设置」入口，新页里既放变暗超时，
+ *   也保留原来的「关于」入口 —— 主页行数不变，布局约束不受影响。
+ *
+ * 变暗超时用「点一下循环切换」而不是滑块:
+ *   档位少（6 个），循环切换不容易误触，也不需要额外的子页面；
+ *   非预设值（用户在相册版里精确调过）会显示成 "M分S秒"，第一次点击会
+ *   回到预设档位的第一项。
+ */
+class SettingsGui : public tsl::Gui {
+    public:
+        tsl::elm::Element *createUI() override {
+            auto *frame = new tsl::elm::OverlayFrame("设置", "变暗超时 · 关于");
+            auto *list  = new tsl::elm::List();
+
+            list->addItem(new tsl::elm::CategoryHeader("显示"));
+
+            auto *dim = new tsl::elm::ListItem("变暗超时", dimming_label());
+            dim->setClickListener([dim](u64 keys) -> bool {
+                if (!(keys & HidNpadButton_A))
+                    return false;
+
+                if (!g_state.service_ok) {
+                    tsl::notification->showNow("未连接 Fizeau", 26, "无法修改");
+                    return true;
+                }
+
+                const std::uint32_t sec = dimming_seconds_now();
+                std::size_t idx = 0;
+                for (std::size_t i = 0; i < DIMMING_COUNT; ++i) {
+                    if (DIMMING_OPTIONS[i].minutes * 60u == sec) {
+                        idx = i;
+                        break;
+                    }
+                }
+                idx = (idx + 1) % DIMMING_COUNT;
+
+                const bool saved = apply_dimming_minutes(DIMMING_OPTIONS[idx].minutes);
+                dim->setValue(dimming_label());
+                tsl::notification->showNow(DIMMING_OPTIONS[idx].label, 26,
+                                           saved ? "已设置·已保存" : "已设置·重启失效");
+                return true;
+            });
+            list->addItem(dim);
+
+            list->addItem(new tsl::elm::CategoryHeader("关于"));
+            auto *about = new tsl::elm::ListItem("关于本插件", "hnayzdf");
+            about->setClickListener([](u64 keys) -> bool {
+                if (keys & HidNpadButton_A) {
+                    tsl::changeTo<InfoGui>();
+                    return true;
+                }
+                return false;
+            });
+            list->addItem(about);
+
+            frame->setContent(list);
+            return frame;
+        }
+};
+
 tsl::elm::Element *MainGui::createUI() {
     // ═══════════════════════════════════════════════════════════════════════
     // 顺序很重要: **先建界面，再尝试连接**
@@ -730,21 +855,22 @@ tsl::elm::Element *MainGui::createUI() {
     // QQ 群等长文本放在独立的 InfoGui 页（那里不受值列宽度限制）。
     list->addItem(new tsl::elm::CategoryHeader("使用说明"));
 
-    // 作者署名行。
+    // 设置入口（原「关于本插件」行）。
     //
-    // 名字用完整的 "hnayzdf"（7 个半角字符）。
-    // 宽度核算: 「关于」2 字 = 46px，值 "hnayzdf" 7 半角 ≈ 84px，
-    // 合计 130px，远小于可用宽度（>300px）—— 安全。
-    // 由 tests/test_layout.cpp 的宽度断言守着（上限 8.0 全角字宽）。
-    auto *about = new tsl::elm::ListItem("关于本插件", "hnayzdf");
-    about->setClickListener([](u64 keys) -> bool {
+    // 为什么把它改成「设置」而不是再加一行:
+    //   本页 3 小标题 + 6 项 = 552px，可见区 557px，再加一行就 622px 会被裁剪。
+    //   所以把这一行升级成入口，把「关于本插件」挪进设置页 —— 行数不变。
+    //
+    // 值 "变暗/关于" 4 个字符，宽度与原来 "hnayzdf" 相当，不会触发滚动。
+    auto *settings = new tsl::elm::ListItem("设置", "变暗/关于");
+    settings->setClickListener([](u64 keys) -> bool {
         if (keys & HidNpadButton_A) {
-            tsl::changeTo<InfoGui>();
+            tsl::changeTo<SettingsGui>();
             return true;
         }
         return false;
     });
-    list->addItem(about);
+    list->addItem(settings);
 
     frame->setContent(list);
     return frame;
